@@ -53,6 +53,40 @@
         }
     }
 
+    function addObjectToDistanceMap(container,objectRaw)
+    {
+        container[objectRaw.type] = container[objectRaw.type] || []
+        container[objectRaw.type].push(objectRaw._id)
+    }
+
+    function addObjectToActiveTemp(availableTemp,objectRaw)
+    {
+        availableTemp[objectRaw.room] = availableTemp[objectRaw.room] || {recalcObjects:[],distanceMap:Array(50)};
+        if(availableTemp[objectRaw.room].controller)
+        {
+         
+            const distance = Math.max(Math.abs(objectRaw.x - availableTemp[objectRaw.room].controller.x), Math.abs(objectRaw.y - availableTemp[objectRaw.room].controller.y));
+            availableTemp[objectRaw.room].distanceMap[distance] = availableTemp[objectRaw.room].distanceMap[distance] || {}
+            addObjectToDistanceMap(availableTemp[objectRaw.room].distanceMap[distance],objectRaw)
+        }else
+        {
+            if(objectRaw.type === C.STRUCTURE_CONTROLLER)
+            {       
+                availableTemp[objectRaw.room].controller = objectRaw
+                availableTemp[objectRaw.room].recalcObjects.forEach(object=>
+                {
+                    const distance = Math.max(Math.abs(object.x - availableTemp[objectRaw.room].controller.x), Math.abs(object.y - availableTemp[objectRaw.room].controller.y));
+                    availableTemp[objectRaw.room].distanceMap[distance] = availableTemp[objectRaw.room].distanceMap[distance] || {}
+                    addObjectToDistanceMap(availableTemp[objectRaw.room].distanceMap[distance],object)
+                })
+            }else
+            {
+                availableTemp[objectRaw.room].recalcObjects.push(objectRaw)
+            }
+        }
+    }
+
+
     function addObjectToRegister(register, type, objectInstance, objectRaw) {
         register[type][objectInstance.id] = objectInstance;
         register.byRoom[objectRaw.room][type][objectInstance.id] = objectInstance;
@@ -88,7 +122,8 @@
             findCache: {},
             rooms: {},
             roomEventLogCache: {},
-            wrapFn: sandboxedFunctionWrapper || function(fn) { return fn }
+            wrapFn: sandboxedFunctionWrapper || function(fn) { return fn },
+            activeCache: {}
         };
 
         var deprecatedShown = [];
@@ -218,7 +253,7 @@
         };
 
         var c = {};
-
+        var activeTemp = {}
         for(var i in runtimeData.roomObjects) {
             var object = runtimeData.roomObjects[i];
 
@@ -271,6 +306,7 @@
                     addObjectToFindCache(register, C.FIND_HOSTILE_SPAWNS, register.spawns[i], object);
                 }
 
+                addObjectToActiveTemp(activeTemp,object)
             }
             if (!object.off && (object.type == 'extension' || object.type == 'spawn') && (object.user == runtimeData.user._id)) {
                 register.rooms[object.room].energyAvailable += object.energy;
@@ -330,6 +366,34 @@
 
         }
 
+        for(let roomName in activeTemp)
+        {
+            let roomData = activeTemp[roomName]
+            let activeCount = {}
+            _.forEach(C.CONTROLLER_STRUCTURES,(v,k)=>activeCount[k] = v[roomData.controller.level])
+            register.activeCache[roomName] = []
+            for(let i = 0; i<50 ;i++)
+            {
+                for(let type in roomData.distanceMap[i])
+                {
+                    let ids = roomData.distanceMap[i][type]
+                    if(ids.length == 0 || activeCount[type] == 0)
+                    {
+                        continue
+                    }
+                    if(ids.length<=activeCount[type])
+                    {
+                        Array.prototype.push.apply(register.activeCache[roomName],ids)
+                        activeCount[type] -= ids.length
+                    }else
+                    {
+                        Array.prototype.push.apply(register.activeCache[roomName],ids.slice(0, activeCount[type]))
+                        activeCount[type] = 0
+                    }
+                }
+            }
+        }
+        
         runtimeData.flags.forEach(flagRoomData => {
 
             var data = flagRoomData.data.split("|");
